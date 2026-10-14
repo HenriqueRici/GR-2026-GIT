@@ -1,130 +1,232 @@
-import pandas as pd
+"""Consolidação e pontuação do absenteísmo com auditoria das ocorrências."""
+
 import json
 
-def absenteismoWebPonto(basePessoal , baseWebPonto):
+import pandas as pd
+
+
+def absenteismoWebPonto(basePessoal, baseWebPonto):
     # Faz uma cópia real do DataFrame após o filtro para evitar SettingWithCopyWarning
+    """Extrai atestados/doações sem horas trabalhadas e cruza com vínculos ativos."""
     baseWebPontoFrequencia = baseWebPonto[
-        baseWebPonto['MF'].isin([
-            '01 - ATESTADO DE COMPARECIMENTO CONSULTA OU AFASTAMENTO MÉDICO ATÉ 03 DIAS',
-            '14 - DOAÇÃO DE SANGUE'
-        ])
+        baseWebPonto["MF"].isin(
+            [
+                "01 - ATESTADO DE COMPARECIMENTO CONSULTA OU AFASTAMENTO MÉDICO ATÉ 03 DIAS",
+                "14 - DOAÇÃO DE SANGUE",
+            ]
+        )
     ].copy()
 
-    baseWebPontoFrequencia = baseWebPontoFrequencia[['LOGIN', 'DataFrequencia', 'MF']]
+    baseWebPontoFrequencia = baseWebPontoFrequencia[["LOGIN", "DataFrequencia", "MF"]]
 
     # Calcular horas por período
-    baseWebPonto['HorasManha'] = (baseWebPonto['SaidaManha'] - baseWebPonto['EntradaManha']).dt.total_seconds() / 3600
-    baseWebPonto['HorasTarde'] = (baseWebPonto['SaidaTarde'] - baseWebPonto['EntradaTarde']).dt.total_seconds() / 3600
-    baseWebPonto['HorasNoite'] = (baseWebPonto['SaidaNoite'] - baseWebPonto['EntradaNoite']).dt.total_seconds() / 3600
+    baseWebPonto["HorasManha"] = (
+        baseWebPonto["SaidaManha"] - baseWebPonto["EntradaManha"]
+    ).dt.total_seconds() / 3600
+    baseWebPonto["HorasTarde"] = (
+        baseWebPonto["SaidaTarde"] - baseWebPonto["EntradaTarde"]
+    ).dt.total_seconds() / 3600
+    baseWebPonto["HorasNoite"] = (
+        baseWebPonto["SaidaNoite"] - baseWebPonto["EntradaNoite"]
+    ).dt.total_seconds() / 3600
 
     # Soma total de horas no dia
-    baseWebPonto['TotalHorasDia'] = baseWebPonto[['HorasManha', 'HorasTarde', 'HorasNoite']].sum(axis=1, skipna=True)
-    baseWebPonto = baseWebPonto.groupby(['LOGIN', 'DataFrequencia']).agg(TotalHorasDia=('TotalHorasDia', 'sum')).reset_index()
+    baseWebPonto["TotalHorasDia"] = baseWebPonto[["HorasManha", "HorasTarde", "HorasNoite"]].sum(
+        axis=1, skipna=True
+    )
+    baseWebPonto = (
+        baseWebPonto.groupby(["LOGIN", "DataFrequencia"])
+        .agg(TotalHorasDia=("TotalHorasDia", "sum"))
+        .reset_index()
+    )
 
-
-    baseWebPonto = pd.merge(baseWebPontoFrequencia, baseWebPonto, on=['LOGIN', 'DataFrequencia'], how='left')
+    baseWebPonto = pd.merge(
+        baseWebPontoFrequencia, baseWebPonto, on=["LOGIN", "DataFrequencia"], how="left"
+    )
 
     # Renomear e filtrar por ausência de horas
-    baseWebPonto = baseWebPonto[baseWebPonto['TotalHorasDia'] == 0]
-    
-    baseWebPonto = baseWebPonto.rename(columns={'LOGIN': 'CPF', 'MF': 'TIPO'})
-    baseWebPonto = baseWebPonto[['CPF', 'DataFrequencia', 'TIPO']]
+    baseWebPonto = baseWebPonto[baseWebPonto["TotalHorasDia"] == 0]
 
-    baseWebPonto = pd.merge(baseWebPonto, basePessoal, on=['CPF'], how='left')
-    baseWebPonto = baseWebPonto[(baseWebPonto['DataFrequencia'] >= baseWebPonto['DataInicio']) & (baseWebPonto['DataFrequencia'] <= baseWebPonto['DataFinal'])].copy()
-    baseWebPonto = baseWebPonto[['NumFunc', 'NumVinc', 'DataFrequencia', 'TIPO']]
-    baseWebPonto = baseWebPonto.rename(columns={'NumFunc': 'Func', 'NumVinc': 'Vinc', 'DataFrequencia':'DataInicial', 'TIPO':'Tipo'})
-    baseWebPonto['DataFinal'] = baseWebPonto['DataInicial']
+    baseWebPonto = baseWebPonto.rename(columns={"LOGIN": "CPF", "MF": "TIPO"})
+    baseWebPonto = baseWebPonto[["CPF", "DataFrequencia", "TIPO"]]
+
+    # Aceita também o esquema Func/Vinc produzido por proporcaoVinculo.
+    basePessoal = basePessoal.rename(
+        columns={
+            chave: destino
+            for chave, destino in [("Func", "NumFunc"), ("Vinc", "NumVinc")]
+            if destino not in basePessoal.columns
+        }
+    )
+    baseWebPonto = pd.merge(baseWebPonto, basePessoal, on=["CPF"], how="left")
+    baseWebPonto = baseWebPonto[
+        (baseWebPonto["DataFrequencia"] >= baseWebPonto["DataInicio"])
+        & (baseWebPonto["DataFrequencia"] <= baseWebPonto["DataFinal"])
+    ].copy()
+    baseWebPonto = baseWebPonto[["NumFunc", "NumVinc", "DataFrequencia", "TIPO"]]
+    baseWebPonto = baseWebPonto.rename(
+        columns={
+            "NumFunc": "Func",
+            "NumVinc": "Vinc",
+            "DataFrequencia": "DataInicial",
+            "TIPO": "Tipo",
+        }
+    )
+    baseWebPonto["DataFinal"] = baseWebPonto["DataInicial"]
 
     return baseWebPonto
 
 
-
 def absenteismoLicencasAfastamentos(baseLicencasAfastamentos, dataInicioGR, dataFimGR):
-    baseLicencasAfastamentos.loc[baseLicencasAfastamentos['DataFinal'] == pd.Timestamp('1753-01-01'), 'DataFinal'] = dataFimGR
+    """Recorta licenças à vigência da GR e descarta períodos sem dias positivos."""
+    baseLicencasAfastamentos.loc[
+        baseLicencasAfastamentos["DataFinal"] == pd.Timestamp("1753-01-01"), "DataFinal"
+    ] = dataFimGR
 
-    baseLicencasAfastamentos = baseLicencasAfastamentos[baseLicencasAfastamentos['DataFinal'] >= dataInicioGR].copy()
-    baseLicencasAfastamentos['DataInicial'] = baseLicencasAfastamentos.apply(lambda row: dataInicioGR if row['DataInicial'] < dataInicioGR else row['DataInicial'], axis=1)
-    baseLicencasAfastamentos['DataFinal'] = baseLicencasAfastamentos.apply(lambda row: dataFimGR if row['DataFinal'] > dataFimGR else row['DataFinal'], axis=1)
+    baseLicencasAfastamentos = baseLicencasAfastamentos[
+        baseLicencasAfastamentos["DataFinal"] >= dataInicioGR
+    ].copy()
+    baseLicencasAfastamentos["DataInicial"] = baseLicencasAfastamentos["DataInicial"].mask(
+        baseLicencasAfastamentos["DataInicial"] < dataInicioGR, dataInicioGR
+    )
+    baseLicencasAfastamentos["DataFinal"] = baseLicencasAfastamentos["DataFinal"].mask(
+        baseLicencasAfastamentos["DataFinal"] > dataFimGR, dataFimGR
+    )
 
-    baseLicencasAfastamentos['DiasAfastamentoGR'] =  (baseLicencasAfastamentos['DataFinal'] - baseLicencasAfastamentos['DataInicial']).dt.days + 1
-    baseLicencasAfastamentos = baseLicencasAfastamentos[baseLicencasAfastamentos['DiasAfastamentoGR'] > 0]
-    baseLicencasAfastamentos = baseLicencasAfastamentos[['Func', 'Vinc', 'DataInicial', 'DataFinal', 'Tipo']]
+    baseLicencasAfastamentos["DiasAfastamentoGR"] = (
+        baseLicencasAfastamentos["DataFinal"] - baseLicencasAfastamentos["DataInicial"]
+    ).dt.days + 1
+    baseLicencasAfastamentos = baseLicencasAfastamentos[
+        baseLicencasAfastamentos["DiasAfastamentoGR"] > 0
+    ]
+    baseLicencasAfastamentos = baseLicencasAfastamentos[
+        ["Func", "Vinc", "DataInicial", "DataFinal", "Tipo"]
+    ]
 
     return baseLicencasAfastamentos
 
 
 def absenteismoFrequencias(baseWebPonto, baseFrequencias):
-
-    for col in ['EntradaManha', 'SaidaManha', 'EntradaTarde', 'SaidaTarde', 'EntradaNoite', 'SaidaNoite']:
-        baseWebPonto[col] = pd.to_datetime(baseWebPonto[col], format='%H:%M:%S', errors='coerce')
+    """Cruza faltas SEAP com dias do WebPonto sem horas registradas."""
+    for col in [
+        "EntradaManha",
+        "SaidaManha",
+        "EntradaTarde",
+        "SaidaTarde",
+        "EntradaNoite",
+        "SaidaNoite",
+    ]:
+        baseWebPonto[col] = pd.to_datetime(baseWebPonto[col], format="%H:%M:%S", errors="coerce")
 
     # Calcular horas por período
-    baseWebPonto['HorasManha'] = (baseWebPonto['SaidaManha'] - baseWebPonto['EntradaManha']).dt.total_seconds() / 3600
-    baseWebPonto['HorasTarde'] = (baseWebPonto['SaidaTarde'] - baseWebPonto['EntradaTarde']).dt.total_seconds() / 3600
-    baseWebPonto['HorasNoite'] = (baseWebPonto['SaidaNoite'] - baseWebPonto['EntradaNoite']).dt.total_seconds() / 3600
+    baseWebPonto["HorasManha"] = (
+        baseWebPonto["SaidaManha"] - baseWebPonto["EntradaManha"]
+    ).dt.total_seconds() / 3600
+    baseWebPonto["HorasTarde"] = (
+        baseWebPonto["SaidaTarde"] - baseWebPonto["EntradaTarde"]
+    ).dt.total_seconds() / 3600
+    baseWebPonto["HorasNoite"] = (
+        baseWebPonto["SaidaNoite"] - baseWebPonto["EntradaNoite"]
+    ).dt.total_seconds() / 3600
 
     # Soma total de horas no dia
-    baseWebPonto['TotalHorasDia'] = baseWebPonto[['HorasManha', 'HorasTarde', 'HorasNoite']].sum(axis=1, skipna=True)
-    baseWebPonto = baseWebPonto.groupby(['LOGIN', 'DataFrequencia'])['TotalHorasDia'].sum().reset_index()
+    baseWebPonto["TotalHorasDia"] = baseWebPonto[["HorasManha", "HorasTarde", "HorasNoite"]].sum(
+        axis=1, skipna=True
+    )
+    baseWebPonto = (
+        baseWebPonto.groupby(["LOGIN", "DataFrequencia"])["TotalHorasDia"].sum().reset_index()
+    )
 
-    baseWebPonto = pd.merge(baseWebPonto, baseFrequencias, left_on=['LOGIN', 'DataFrequencia'], right_on=['CPF', 'DataInicial'], how='left')
+    baseWebPonto = pd.merge(
+        baseWebPonto,
+        baseFrequencias,
+        left_on=["LOGIN", "DataFrequencia"],
+        right_on=["CPF", "DataInicial"],
+        how="left",
+    )
 
-    baseWebPonto = baseWebPonto[baseWebPonto['TotalHorasDia'] == 0].copy()
-    baseWebPonto = baseWebPonto[baseWebPonto['Tipo'].notna()].copy()
-    baseWebPonto = baseWebPonto[['Func', 'Vinc', 'DataInicial', 'DataFinal', 'Tipo']]
+    baseWebPonto = baseWebPonto[baseWebPonto["TotalHorasDia"] == 0].copy()
+    baseWebPonto = baseWebPonto[baseWebPonto["Tipo"].notna()].copy()
+    baseWebPonto = baseWebPonto[["Func", "Vinc", "DataInicial", "DataFinal", "Tipo"]]
 
     return baseWebPonto
 
 
-def absenteismoGeral(grupoEleitos, absenteismoWebPonto, baseLicencas, baseFrequencia): 
+def absenteismoGeral(grupoEleitos, absenteismoWebPonto, baseLicencas, baseFrequencia):
+    """Consolida ocorrências, conta dias únicos e anexa JSON de auditoria por vínculo."""
     baseAbs = pd.concat([absenteismoWebPonto, baseLicencas, baseFrequencia])
 
-    baseAbs = baseAbs.drop_duplicates(subset=['Func', 'Vinc', 'Tipo', 'DataInicial', 'DataFinal'])
-    baseAbs['Tipo'] = baseAbs['Tipo'].str.replace(r'^\d+\s*-\s*', '', regex=True)
-
+    baseAbs = baseAbs.drop_duplicates(subset=["Func", "Vinc", "Tipo", "DataInicial", "DataFinal"])
+    baseAbs["Tipo"] = baseAbs["Tipo"].str.replace(r"^\d+\s*-\s*", "", regex=True)
 
     def manter_licencas_validas(df):
+        """Exclui atestados/doações integralmente contidos em outra licença do vínculo."""
         resultado = []
-        for _, group in df.groupby(['Func', 'Vinc']):
+        for _, group in df.groupby(["Func", "Vinc"]):
             # Separar as licenças do tipo específico "01"
-            licencas_tipo_01 = group[group['Tipo'].isin([
-                'ATESTADO DE COMPARECIMENTO CONSULTA OU AFASTAMENTO MÉDICO ATÉ 03 DIAS', 'DOAÇÃO DE SANGUE'])]
+            licencas_tipo_01 = group[
+                group["Tipo"].isin(
+                    [
+                        "ATESTADO DE COMPARECIMENTO CONSULTA OU AFASTAMENTO MÉDICO ATÉ 03 DIAS",
+                        "DOAÇÃO DE SANGUE",
+                    ]
+                )
+            ]
 
             # Separar as licenças de outros tipos
-            licencas_outras = group[~group['Tipo'].isin([
-            'ATESTADO DE COMPARECIMENTO CONSULTA OU AFASTAMENTO MÉDICO ATÉ 03 DIAS','DOAÇÃO DE SANGUE'])]
+            licencas_outras = group[
+                ~group["Tipo"].isin(
+                    [
+                        "ATESTADO DE COMPARECIMENTO CONSULTA OU AFASTAMENTO MÉDICO ATÉ 03 DIAS",
+                        "DOAÇÃO DE SANGUE",
+                    ]
+                )
+            ]
 
             # Manter todas as licenças que não são do tipo 01
-            resultado.extend(licencas_outras.to_dict(orient='records'))
+            resultado.extend(licencas_outras.to_dict(orient="records"))
 
             # Verificar se cada licença do tipo 01 não está completamente dentro de outra
             for _, row in licencas_tipo_01.iterrows():
-                if not any((row['DataInicial'] >= l['DataInicial']) and (row['DataFinal'] <= l['DataFinal']) for _, l in licencas_outras.iterrows()):
+                if not any(
+                    (row["DataInicial"] >= licenca["DataInicial"])
+                    and (row["DataFinal"] <= licenca["DataFinal"])
+                    for _, licenca in licencas_outras.iterrows()
+                ):
                     resultado.append(row.to_dict())
 
         return pd.DataFrame(resultado)
-    
+
     baseAbs = manter_licencas_validas(baseAbs)
-    eleitos = grupoEleitos.rename(columns={'NumFunc': 'Func', 'NumVinc':'Vinc'})
+    eleitos = grupoEleitos.rename(columns={"NumFunc": "Func", "NumVinc": "Vinc"})
 
-    eleitosParaAbs = eleitos[['Func', 'Vinc', 'DataInicio', 'DataFinal']]
-    eleitosParaAbs = eleitosParaAbs.rename(columns={'DataInicio': 'DataInicioAtribuicao', 'DataFinal':'DataFinalAtribuicao'})
+    eleitosParaAbs = eleitos[["Func", "Vinc", "DataInicio", "DataFinal"]]
+    eleitosParaAbs = eleitosParaAbs.rename(
+        columns={"DataInicio": "DataInicioAtribuicao", "DataFinal": "DataFinalAtribuicao"}
+    )
 
-    baseAbs = pd.merge(baseAbs, eleitosParaAbs, on=['Func', 'Vinc'], how='left')
-    baseAbs = baseAbs[((baseAbs['Tipo'] == 'ARC - AGUARDANDO REGULARIZAÇÃO DO CARGO') & 
-                       (baseAbs['DataInicial'] >= baseAbs['DataInicioAtribuicao']) & 
-                       (baseAbs['DataFinal'] <= baseAbs['DataFinalAtribuicao'])) | 
-                       (baseAbs['Tipo'] != 'ARC - AGUARDANDO REGULARIZAÇÃO DO CARGO')]
+    baseAbs = pd.merge(baseAbs, eleitosParaAbs, on=["Func", "Vinc"], how="left")
+    baseAbs = baseAbs[
+        (
+            (baseAbs["Tipo"] == "ARC - AGUARDANDO REGULARIZAÇÃO DO CARGO")
+            & (baseAbs["DataInicial"] >= baseAbs["DataInicioAtribuicao"])
+            & (baseAbs["DataFinal"] <= baseAbs["DataFinalAtribuicao"])
+        )
+        | (baseAbs["Tipo"] != "ARC - AGUARDANDO REGULARIZAÇÃO DO CARGO")
+    ]
 
-    baseAbs = baseAbs[['Func', 'Vinc', 'Tipo', 'DataInicial', 'DataFinal']]
-    baseAbs = baseAbs.drop_duplicates(subset=['Func', 'Vinc', 'Tipo', 'DataInicial', 'DataFinal'])
-    
-    absenteismoJson = baseAbs.to_dict(orient='records')
+    baseAbs = baseAbs[["Func", "Vinc", "Tipo", "DataInicial", "DataFinal"]]
+    baseAbs = baseAbs.drop_duplicates(subset=["Func", "Vinc", "Tipo", "DataInicial", "DataFinal"])
+
+    absenteismo_por_vinculo = {}
+    for item in baseAbs.to_dict(orient="records"):
+        chave = (item["Func"], item["Vinc"])
+        absenteismo_por_vinculo.setdefault(chave, []).append(item)
 
     def calcular_dias_ausentes(df):
         # Ordenar as datas para facilitar a junção de períodos sobrepostos
-        df = df.sort_values(by=['DataInicial', 'DataInicial'])
+        """Conta datas únicas após unir períodos sobrepostos de afastamento."""
+        df = df.sort_values(by=["DataInicial", "DataInicial"])
 
         # Lista para armazenar os períodos consolidados
         periodos_consolidados = []
@@ -137,17 +239,17 @@ def absenteismoGeral(grupoEleitos, absenteismoWebPonto, baseLicencas, baseFreque
         for i, row in df.iterrows():
             if inicio_periodo is None:
                 # Definir o primeiro período
-                inicio_periodo = row['DataInicial']
-                fim_periodo = row['DataFinal']
+                inicio_periodo = row["DataInicial"]
+                fim_periodo = row["DataFinal"]
             else:
                 # Se o período atual se sobrepõe ao anterior, estenda o período
-                if row['DataInicial'] <= fim_periodo:
-                    fim_periodo = max(fim_periodo, row['DataFinal'])
+                if row["DataInicial"] <= fim_periodo:
+                    fim_periodo = max(fim_periodo, row["DataFinal"])
                 else:
                     # Se não houver sobreposição, finalize o período anterior e inicie um novo
                     periodos_consolidados.append((inicio_periodo, fim_periodo))
-                    inicio_periodo = row['DataInicial']
-                    fim_periodo = row['DataFinal']
+                    inicio_periodo = row["DataInicial"]
+                    fim_periodo = row["DataFinal"]
 
         # Adicionar o último período
         if inicio_periodo is not None:
@@ -162,113 +264,70 @@ def absenteismoGeral(grupoEleitos, absenteismoWebPonto, baseLicencas, baseFreque
 
         return len(dias_unicos)
 
-    absenteismoCompilado = baseAbs.groupby(['Func', 'Vinc']).apply(calcular_dias_ausentes, include_groups=False).reset_index(name='DiasAbsenteismo')
+    absenteismoCompilado = (
+        baseAbs.groupby(["Func", "Vinc"])
+        .apply(calcular_dias_ausentes, include_groups=False)
+        .reset_index(name="DiasAbsenteismo")
+    )
 
-    eleitos = grupoEleitos.rename(columns={'NumFunc': 'Func', 'NumVinc':'Vinc'})
-    eleitos = pd.merge(eleitos, absenteismoCompilado, on=['Func', 'Vinc'], how='left')
-    
-    eleitos['DiasAbsenteismo'] = eleitos['DiasAbsenteismo'].fillna(0)
+    eleitos = grupoEleitos.rename(columns={"NumFunc": "Func", "NumVinc": "Vinc"})
+    eleitos = pd.merge(eleitos, absenteismoCompilado, on=["Func", "Vinc"], how="left")
+
+    eleitos["DiasAbsenteismo"] = eleitos["DiasAbsenteismo"].fillna(0)
 
     def encontrar_json_por_func_vinc(num_func, num_vinc):
-        return [item for item in absenteismoJson if item['Func'] == num_func and item['Vinc'] == num_vinc]
-    
-    eleitos['ListaAbsenteismo'] = eleitos.apply(lambda row: encontrar_json_por_func_vinc(row['Func'], row['Vinc']), axis=1)
+        """Obtém as ocorrências previamente indexadas por servidor e vínculo."""
+        return absenteismo_por_vinculo.get((num_func, num_vinc), [])
+
+    eleitos["ListaAbsenteismo"] = eleitos.apply(
+        lambda row: encontrar_json_por_func_vinc(row["Func"], row["Vinc"]), axis=1
+    )
 
     def remover_informacao_dos_jsons(json_list, chave_para_remover):
+        """Remove uma chave dos registros de auditoria in-place."""
         for item in json_list:
             item.pop(chave_para_remover, None)  # Remove a chave, se existir
         return json_list
 
-    eleitos['ListaAbsenteismo'] = eleitos['ListaAbsenteismo'].apply(lambda x: remover_informacao_dos_jsons(x, "Func"))
-    eleitos['ListaAbsenteismo'] = eleitos['ListaAbsenteismo'].apply(lambda x: remover_informacao_dos_jsons(x, "Vinc"))
+    eleitos["ListaAbsenteismo"] = eleitos["ListaAbsenteismo"].apply(
+        lambda x: remover_informacao_dos_jsons(x, "Func")
+    )
+    eleitos["ListaAbsenteismo"] = eleitos["ListaAbsenteismo"].apply(
+        lambda x: remover_informacao_dos_jsons(x, "Vinc")
+    )
 
     eleitos["ListaAbsenteismo"] = eleitos["ListaAbsenteismo"].apply(
-    lambda lista: json.dumps([
-        {
-            **d,
-            "DataInicial": d["DataInicial"].strftime("%Y-%m-%d %H:%M:%S"),
-            "DataFinal": d["DataFinal"].strftime("%Y-%m-%d %H:%M:%S")
-        }
-        for d in lista
-    ], ensure_ascii=False))
+        lambda lista: json.dumps(
+            [
+                {
+                    **d,
+                    "DataInicial": d["DataInicial"].strftime("%Y-%m-%d %H:%M:%S"),
+                    "DataFinal": d["DataFinal"].strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                for d in lista
+            ],
+            ensure_ascii=False,
+        )
+    )
 
     return eleitos
 
 
 def pontuacaoAbsenteismo(row):
-    if row['CargoGR'] in ['PROFESSOR EM REGÊNCIA', 'GESTOR', 'PROFESSOR FORA DE REGÊNCIA']:
-        if row['DiasAbsenteismo'] == 0:
-            return 300
-        elif row['DiasAbsenteismo'] in [1, 2]:
-            return 270
-        elif row['DiasAbsenteismo'] in [3, 4]:
-            return 240
-        elif row['DiasAbsenteismo'] in [5, 6]:
-            return 210
-        elif row['DiasAbsenteismo'] in [7, 8]:
-            return 180
-        elif row['DiasAbsenteismo'] in [9, 10]:
-            return 150
-        elif row['DiasAbsenteismo'] in [11, 12]:
-            return 120
-        elif row['DiasAbsenteismo'] in [13, 14]:
-            return 90
-        elif row['DiasAbsenteismo'] in [15, 16]:
-            return 60
-        elif row['DiasAbsenteismo'] in [17, 18]:
-            return 30
-        elif row['DiasAbsenteismo'] in [19, 20]:
-            return 0
-        elif row['DiasAbsenteismo'] in [21, 22]:
-            return -30
-        elif row['DiasAbsenteismo'] in [23, 24]:
-            return -60
-        elif row['DiasAbsenteismo'] in [25, 26]:
-            return -90
-        elif row['DiasAbsenteismo'] in [27, 28]:
-            return -120
-        elif row['DiasAbsenteismo'] in [29, 30]:
-            return -150
-        else:
-            return -150
-    else:
-        if row['DiasAbsenteismo'] == 0:
-            return 450
-        elif row['DiasAbsenteismo'] in [1, 2]:
-            return 405
-        elif row['DiasAbsenteismo'] in [3, 4]:
-            return 360
-        elif row['DiasAbsenteismo'] in [5, 6]:
-            return 315
-        elif row['DiasAbsenteismo'] in [7, 8]:
-            return 270
-        elif row['DiasAbsenteismo'] in [9, 10]:
-            return 225
-        elif row['DiasAbsenteismo'] in [11, 12]:
-            return 180
-        elif row['DiasAbsenteismo'] in [13, 14]:
-            return 135
-        elif row['DiasAbsenteismo'] in [15, 16]:
-            return 90
-        elif row['DiasAbsenteismo'] in [17, 18]:
-            return 45
-        elif row['DiasAbsenteismo'] in [19, 20]:
-            return 0
-        elif row['DiasAbsenteismo'] in [21, 22]:
-            return -30
-        elif row['DiasAbsenteismo'] in [23, 24]:
-            return -60
-        elif row['DiasAbsenteismo'] in [25, 26]:
-            return -90
-        elif row['DiasAbsenteismo'] in [27, 28]:
-            return -120
-        elif row['DiasAbsenteismo'] in [29, 30]:
-            return -150
-        else:
-            return -150
-                
+    """Pontua dias inteiros em faixas de dois; preserva -150 fora das faixas."""
+    dias = row["DiasAbsenteismo"]
+    teto = maxAbsenteismo(row)
+    if dias == 0:
+        return teto
+    for faixa in range(1, 16):
+        if dias in (2 * faixa - 1, 2 * faixa):
+            return teto - faixa * (teto // 10) if faixa <= 10 else -(faixa - 10) * 30
+    return -150
+
+
 def maxAbsenteismo(row):
-    if row['CargoGR'] in ['PROFESSOR EM REGÊNCIA', 'GESTOR', 'PROFESSOR FORA DE REGÊNCIA']:
+    """Retorna 300 para professores/gestores e 450 para os demais cargos."""
+    if row["CargoGR"] in ["PROFESSOR EM REGÊNCIA", "GESTOR", "PROFESSOR FORA DE REGÊNCIA"]:
         return 300
     else:
         return 450

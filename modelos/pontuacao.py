@@ -1,21 +1,30 @@
-def pontuacaoGeral(base):
-    if base['DiasAbsenteismo'] <= 30:
-        if base['CargoGR'] == 'GESTOR':
-            return base['PontuacaoAbsenteismo'] + base['PontuacaoEvasao'] + base['PontuacaoFormacao'] + base['PontuacaoMetaAprendizagem'] + base['PontuacaoMetaAdiministrativa']   
-        elif base['CargoGR'] == 'PROFESSOR FORA DE REGÊNCIA':
-            return base['PontuacaoAbsenteismo'] + base['PontuacaoEvasao'] + base['PontuacaoFormacao'] + base['PontuacaoMetaAprendizagem']
-        elif base['CargoGR'] == 'PROFESSOR EM REGÊNCIA':
-            return base['PontuacaoAbsenteismo'] + base['PontuacaoEvasao'] + base['PontuacaoFormacao'] + base['PontuacaoMetaAprendizagem']
-        elif base['CargoGR'] == 'TAE/AAE':
-            return base['PontuacaoAbsenteismo'] + base['PontuacaoEvasao'] + base['PontuacaoFormacao'] + base['PontuacaoMetaAprendizagem'] + base['PontuacaoMetaAdiministrativa']   
-        elif base['CargoGR'] == 'CIVIS E MILITARES LOTADOS NA SEDUC':
-            return base['PontuacaoAbsenteismo'] + base['PontuacaoEvasao'] + base['PontuacaoFormacao'] + base['PontuacaoMetaAprendizagem']
-        else: 
-            return 0
-    else: 
-        return 0
+"""Composição dos pontos e cálculo do valor final da GR."""
 
-    
+
+def pontuacaoGeral(base):
+    """Soma eixos aplicáveis ao cargo; mais de 30 dias de ausência zera a GR."""
+    if not base["DiasAbsenteismo"] <= 30:
+        return 0
+    cargo = base["CargoGR"]
+    if cargo not in (
+        "GESTOR",
+        "TAE/AAE",
+        "PROFESSOR EM REGÊNCIA",
+        "PROFESSOR FORA DE REGÊNCIA",
+        "CIVIS E MILITARES LOTADOS NA SEDUC",
+    ):
+        return 0
+    pontos = (
+        base["PontuacaoAbsenteismo"]
+        + base["PontuacaoEvasao"]
+        + base["PontuacaoFormacao"]
+        + base["PontuacaoMetaAprendizagem"]
+    )
+    if cargo in ("GESTOR", "TAE/AAE"):
+        pontos += base["PontuacaoMetaAdiministrativa"]
+    return pontos
+
+
 def valorFinalGR(base):
-    return base['ValorGRBaseVinculo']/1000*base['PontuacaoGeral']
- 
+    """Converte a pontuação em valor: base do vínculo dividida por 1000 vezes os pontos."""
+    return base["ValorGRBaseVinculo"] / 1000 * base["PontuacaoGeral"]
